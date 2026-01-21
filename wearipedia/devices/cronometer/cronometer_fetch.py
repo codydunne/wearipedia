@@ -1,8 +1,10 @@
 import io
+import re
+
+import pandas as pd
 
 
 def fetch_real_data(self, start_date, end_date, data_type):
-
     """Main function for fetching real data from the Cronometer API.
 
     :param start_date: the start date represented as a string in the format "YYYY-MM-DD"
@@ -50,11 +52,14 @@ def fetch_real_data(self, start_date, end_date, data_type):
 
     pattern = r"//OK\[(?P<userid>\d+),"
     match_object = re.match(pattern, res.text)
+    print(pattern, res.text)
 
     if match_object:
         userid = match_object.group("userid")
     else:
-        raise Exception("Could not extract the userid, authentication failed")
+        raise Exception(
+            pattern, res.text, "Could not extract the userid, authentication failed"
+        )
 
     if res.status_code != 200:
         raise Exception("Could not fetch the data, authentication failed")
@@ -87,9 +92,22 @@ def fetch_real_data(self, start_date, end_date, data_type):
 
     # creating a dataframe from the data
     try:
-        df = pd.read_csv(io.StringIO(content.decode("utf-8")))
-    except:
-        raise Exception("Could not parse the data")
+        content_utf = content.decode("utf-8")
+
+        # Double-quote the biometrics with [min,max] notation that break the CSV string parsing
+        # hard-coded to these particular user-defined biometrics
+        content_utf = content_utf.replace("Badness [0,3]", '"Badness [0,3]"')
+        content_utf = content_utf.replace("Discomfort [0,3]", '"Discomfort [0,3]"')
+        content_utf = content_utf.replace("Badness [0,4]", '"Badness [0,4]"')
+
+        # print("Content UTF:")
+        # print(content_utf)
+        # print("\n" + "=" * 80 + "\n")
+
+        df = pd.read_csv(io.StringIO(content_utf))
+    except Exception as e:
+        print(f"Error parsing data: {e}")
+        raise
 
     # returning the dataframe
     return list(df.to_dict("index").values())
