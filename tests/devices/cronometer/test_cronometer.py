@@ -140,9 +140,13 @@ def recipes_helper(data):
     for r in data:
         assert isinstance(r["recipe_id"], int)
         assert isinstance(r["name"], str)
+        assert isinstance(r["servings_per_recipe"], (int, float))
         assert isinstance(r["ingredients"], list)
         for ing in r["ingredients"]:
+            assert isinstance(ing["food_id"], int)
             assert isinstance(ing["name"], str)
+            assert isinstance(ing["amount"], (int, float))
+            assert isinstance(ing["unit"], str)
             assert isinstance(ing["fraction_of_recipe"], (int, float))
 
 
@@ -152,10 +156,18 @@ def saved_meals_helper(data):
         assert isinstance(m["meal_id"], int)
         assert isinstance(m["name"], str)
         assert isinstance(m["servings"], list)
+        for s in m["servings"]:
+            assert isinstance(s["food_id"], int)
+            assert isinstance(s["name"], str)
+            assert isinstance(s["amount"], (int, float))
+            assert isinstance(s["unit"], str)
 
 
 def foods_with_components_helper(data):
     assert isinstance(data, dict)
+    for fid, components in data.items():
+        assert isinstance(fid, int)
+        assert isinstance(components, list)
 
 
 def exercises_helper(data):
@@ -199,6 +211,12 @@ def _make_mock_session(json_payload=None):
     get_response.json.return_value = json_payload if json_payload is not None else []
     get_response.text = '{"ok": true}'
     session.get.return_value = get_response
+
+    # Any other HTTP verb is a contract violation; make it noisy.
+    for verb in ("put", "patch", "delete", "options", "head"):
+        getattr(session, verb).side_effect = AssertionError(
+            f"recipe / saved-meal fetchers must not call session.{verb}"
+        )
     return session
 
 
@@ -224,6 +242,15 @@ def test_recipe_fetchers_are_read_only():
         stub.session = session
 
         cronometer_fetch.fetch_real_data(stub, "2025-01-01", "2025-01-31", data_type)
+
+        # Hard assertion: no other HTTP verbs were attempted. (The mock
+        # session would have raised AssertionError if they were, but
+        # MagicMock attributes default to no-op when not configured —
+        # double-check via call_count.)
+        for verb in ("put", "patch", "delete"):
+            assert getattr(session, verb).call_count == 0, (
+                f"{data_type}: session.{verb} must never be called"
+            )
 
         # All data-fetching calls (everything after auth) must be GETs.
         assert session.get.called, f"{data_type} fetcher must issue a GET"
@@ -273,3 +300,7 @@ def test_recipe_fetchers_are_read_only():
         lower = url.lower()
         for word in forbidden:
             assert word not in lower
+    for verb in ("put", "patch", "delete"):
+        assert getattr(session, verb).call_count == 0, (
+            f"foods_with_components: session.{verb} must never be called"
+        )

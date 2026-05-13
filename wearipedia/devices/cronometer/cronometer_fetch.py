@@ -79,35 +79,53 @@ def _fetch_recipes(session, auth_token, start_date, end_date):
     that is, it must be invoked with ``session.get`` only — this function
     asserts that contract.
 
+    The recipe list is account-scoped, not date-scoped, so ``start_date``
+    / ``end_date`` are accepted for signature parity with the other
+    fetchers but not forwarded to the request.
+
     Returns a list of
     ``{recipe_id, name, servings_per_recipe, ingredients: [...]}``.
     """
+    del start_date, end_date  # account-scoped, not date-scoped
     url = "https://cronometer.com/recipes"
     _assert_safe_path(url)
-    params = {"nonce": auth_token, "start": start_date, "end": end_date}
+    params = {"nonce": auth_token}
     res = session.get(url, params=params)
     if res.status_code != 200:
-        return []
+        raise Exception(
+            f"Failed to fetch recipes from {url}: HTTP {res.status_code}. "
+            f"This endpoint is a stub — see _fetch_recipes docstring."
+        )
     try:
         payload = res.json()
     except ValueError:
-        return []
+        raise Exception(
+            f"Recipe endpoint at {url} did not return JSON. Stub URL "
+            f"likely needs updating; see _fetch_recipes docstring."
+        )
     return payload if isinstance(payload, list) else payload.get("recipes", [])
 
 
 def _fetch_saved_meals(session, auth_token, start_date, end_date):
     """Read the user's Saved Meals via a single GET. Same contract /
     same stub caveat as :func:`_fetch_recipes`."""
+    del start_date, end_date  # account-scoped, not date-scoped
     url = "https://cronometer.com/saved_meals"
     _assert_safe_path(url)
-    params = {"nonce": auth_token, "start": start_date, "end": end_date}
+    params = {"nonce": auth_token}
     res = session.get(url, params=params)
     if res.status_code != 200:
-        return []
+        raise Exception(
+            f"Failed to fetch saved meals from {url}: HTTP {res.status_code}. "
+            f"This endpoint is a stub — see _fetch_saved_meals docstring."
+        )
     try:
         payload = res.json()
     except ValueError:
-        return []
+        raise Exception(
+            f"Saved meals endpoint at {url} did not return JSON. Stub URL "
+            f"likely needs updating; see _fetch_saved_meals docstring."
+        )
     return payload if isinstance(payload, list) else payload.get("saved_meals", [])
 
 
@@ -117,8 +135,15 @@ def _fetch_foods_with_components(session, auth_token, food_ids):
     foods Cronometer has pre-decomposed). Read-only — issues only GETs,
     one per food_id.
 
+    ``food_ids`` is passed in by the caller (typically the ibs-cronometer
+    pipeline, which extracts them from the previously-fetched servings
+    DataFrame) via the ``params={"food_ids": [...]}`` argument on
+    ``device.get_data("foods_with_components", params=...)``.
+
     Returns ``{food_id: [ingredient_dict, ...]}`` (only foods that
-    actually have components are included)."""
+    actually have components are included). Individual food lookups that
+    404 are skipped rather than failing the whole batch — most foods in
+    Cronometer's database don't have components and that's expected."""
     out = {}
     food_ids = food_ids or []
     for fid in food_ids:
@@ -159,11 +184,6 @@ def fetch_real_data(self, start_date, end_date, data_type):
     if self.session is None:
         raise Exception("Not authenticated")
 
-    # Stash the GWT token on the device for the read-only-safety unit
-    # test, which exercises just the new fetchers with a mocked session.
-    self.sesnonce_value = self.session.cookies.get("sesnonce") or getattr(
-        self, "sesnonce_value", None
-    )
     auth_token = _authenticate_gwt(self.session)
 
     if data_type == "recipes":

@@ -80,6 +80,11 @@ class Cronometer(BaseDevice):
         }
 
     def _get_real(self, data_type, params):
+        # `foods_with_components` is a per-food lookup: callers pass the
+        # food_ids encountered in their servings via params. Stash them on
+        # the device so `fetch_real_data` can pick them up without
+        # widening its public signature.
+        self._pending_food_ids = list(params.get("food_ids", []) or [])
         return fetch_real_data(
             self, params["start_date"], params["end_date"], data_type
         )
