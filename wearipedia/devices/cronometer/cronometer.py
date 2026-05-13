@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 from ...devices.device import BaseDevice
 from ...utils import seed_everything
 from .cronometer_fetch import fetch_real_data
-from .cronometer_synthetic import create_syn_data
+from .cronometer_synthetic import create_syn_composites, create_syn_data
 
 # todo: change this to better path
 CRED_CACHE_PATH = "/tmp/wearipedia_cronometer_data.pkl"
@@ -25,6 +25,16 @@ class Cronometer(BaseDevice):
     * `exercises`: a list that contains exercises data for each day
 
     * `biometrics`: a list that contains biometrics data for each day
+
+    * `recipes`: a list of the user's Custom Recipes with per-recipe ingredients
+      (read-only — never invokes Cronometer's destructive Explode Recipe mutation)
+
+    * `saved_meals`: a list of the user's Saved Meals with their constituent servings
+      (read-only)
+
+    * `foods_with_components`: a dict mapping ``food_id`` -> list of ingredient dicts
+      for any food whose Cronometer record exposes a components/ingredients list
+      (read-only)
 
     :param seed: random seed for synthetic data generation, defaults to 0
     :type seed: int, optional
@@ -45,7 +55,15 @@ class Cronometer(BaseDevice):
             "end_date": str(end_date),
         }
         self._initialize_device_params(
-            ["dailySummary", "servings", "exercises", "biometrics"],
+            [
+                "dailySummary",
+                "servings",
+                "exercises",
+                "biometrics",
+                "recipes",
+                "saved_meals",
+                "foods_with_components",
+            ],
             params,
             {
                 "seed": 0,
@@ -62,6 +80,11 @@ class Cronometer(BaseDevice):
         }
 
     def _get_real(self, data_type, params):
+        # `foods_with_components` is a per-food lookup: callers pass the
+        # food_ids encountered in their servings via params. Stash them on
+        # the device so `fetch_real_data` can pick them up without
+        # widening its public signature.
+        self._pending_food_ids = list(params.get("food_ids", []) or [])
         return fetch_real_data(
             self, params["start_date"], params["end_date"], data_type
         )
@@ -82,6 +105,12 @@ class Cronometer(BaseDevice):
 
         if data_type in ["exercises", "biometrics"]:
             return data[start_idx * 2 : end_idx * 2]
+        elif data_type in ["recipes", "saved_meals", "foods_with_components"]:
+            # User-defined composites are not date-indexed daily entries; the
+            # full collection is returned as-is so callers can resolve any
+            # food_id seen in servings, regardless of when the recipe was
+            # authored.
+            return data
         else:
             return data[start_idx:end_idx]
 
@@ -99,6 +128,15 @@ class Cronometer(BaseDevice):
             self.init_params["synthetic_start_date"],
             self.init_params["synthetic_end_date"],
         )
+
+        # Composite metadata for the recipe-explosion pipeline. Generated
+        # separately from the date-indexed types so this expansion stays
+        # additive and `create_syn_data`'s signature is unchanged.
+        (
+            self.recipes,
+            self.saved_meals,
+            self.foods_with_components,
+        ) = create_syn_composites()
 
     def _authenticate(self, auth_creds):
 

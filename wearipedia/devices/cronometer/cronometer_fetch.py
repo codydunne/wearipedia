@@ -3,6 +3,117 @@ import re
 
 import pandas as pd
 
+# Set of HTTP paths this module will never call. Enforced both by code review
+# and by `tests/devices/cronometer/test_cronometer.py::test_recipe_fetchers_are_read_only`.
+# Any new recipe / saved-meal / components fetcher MUST go through `session.get`
+# and MUST NOT touch any URL containing one of these substrings.
+_FORBIDDEN_PATH_SUBSTRINGS = ("explode", "delete", "update")
+
+
+def _assert_safe_path(url):
+    lower = url.lower()
+    for forbidden in _FORBIDDEN_PATH_SUBSTRINGS:
+        if forbidden in lower:
+            raise Exception(
+                f"Refusing to call URL containing forbidden substring "
+                f"'{forbidden}': {url}. Recipe / saved-meal fetchers are "
+                f"read-only by contract."
+            )
+
+
+def _fetch_recipes(session, auth_token, start_date, end_date):
+    """Read the user's Custom Recipes via a single GET.
+
+    The actual Cronometer endpoint that powers the recipe-list panel in
+    the web UI is not yet finalized in this stub; it should be discovered
+    by inspecting the requests the web UI makes when rendering the
+    Recipes section BEFORE the user clicks Explode. Whatever endpoint
+    that is, it must be invoked with ``session.get`` only — this function
+    asserts that contract.
+
+    The recipe list is account-scoped, not date-scoped, so ``start_date``
+    / ``end_date`` are accepted for signature parity with the other
+    fetchers but not forwarded to the request.
+
+    Returns a list of
+    ``{recipe_id, name, servings_per_recipe, ingredients: [...]}``.
+    """
+    del start_date, end_date  # account-scoped, not date-scoped
+    url = "https://cronometer.com/recipes"
+    _assert_safe_path(url)
+    params = {"nonce": auth_token}
+    res = session.get(url, params=params)
+    if res.status_code != 200:
+        raise Exception(
+            f"Failed to fetch recipes from {url}: HTTP {res.status_code}. "
+            f"This endpoint is a stub — see _fetch_recipes docstring."
+        )
+    try:
+        payload = res.json()
+    except ValueError:
+        raise Exception(
+            f"Recipe endpoint at {url} did not return JSON. Stub URL "
+            f"likely needs updating; see _fetch_recipes docstring."
+        )
+    return payload if isinstance(payload, list) else payload.get("recipes", [])
+
+
+def _fetch_saved_meals(session, auth_token, start_date, end_date):
+    """Read the user's Saved Meals via a single GET. Same contract /
+    same stub caveat as :func:`_fetch_recipes`."""
+    del start_date, end_date  # account-scoped, not date-scoped
+    url = "https://cronometer.com/saved_meals"
+    _assert_safe_path(url)
+    params = {"nonce": auth_token}
+    res = session.get(url, params=params)
+    if res.status_code != 200:
+        raise Exception(
+            f"Failed to fetch saved meals from {url}: HTTP {res.status_code}. "
+            f"This endpoint is a stub — see _fetch_saved_meals docstring."
+        )
+    try:
+        payload = res.json()
+    except ValueError:
+        raise Exception(
+            f"Saved meals endpoint at {url} did not return JSON. Stub URL "
+            f"likely needs updating; see _fetch_saved_meals docstring."
+        )
+    return payload if isinstance(payload, list) else payload.get("saved_meals", [])
+
+
+def _fetch_foods_with_components(session, auth_token, food_ids):
+    """Per-food lookup for any ``food_id`` whose Cronometer record
+    exposes a ``components``/``ingredients`` list (e.g. branded packaged
+    foods Cronometer has pre-decomposed). Read-only — issues only GETs,
+    one per food_id.
+
+    ``food_ids`` is passed in by the caller (typically the ibs-cronometer
+    pipeline, which extracts them from the previously-fetched servings
+    DataFrame) via the ``params={"food_ids": [...]}`` argument on
+    ``device.get_data("foods_with_components", params=...)``.
+
+    Returns ``{food_id: [ingredient_dict, ...]}`` (only foods that
+    actually have components are included). Individual food lookups that
+    404 are skipped rather than failing the whole batch — most foods in
+    Cronometer's database don't have components and that's expected."""
+    out = {}
+    food_ids = food_ids or []
+    for fid in food_ids:
+        url = "https://cronometer.com/food"
+        _assert_safe_path(url)
+        params = {"nonce": auth_token, "food_id": int(fid)}
+        res = session.get(url, params=params)
+        if res.status_code != 200:
+            continue
+        try:
+            payload = res.json()
+        except ValueError:
+            continue
+        components = payload.get("components") or payload.get("ingredients")
+        if components:
+            out[int(fid)] = components
+    return out
+
 
 def fetch_real_data(self, start_date, end_date, data_type):
     """Main function for fetching real data from the Cronometer API.
@@ -11,10 +122,11 @@ def fetch_real_data(self, start_date, end_date, data_type):
     :type start_date: str
     :param end_date: the end date represented as a string in the format "YYYY-MM-DD"
     :type end_date: str
-    :param data_type: the type of data to fetch, one of "dailySummary", "servings", "exercises", "biometrics"
+    :param data_type: the type of data to fetch, one of "dailySummary", "servings",
+        "exercises", "biometrics", "recipes", "saved_meals", "foods_with_components"
     :type data_type: str
     :return: the data fetched from the API according to the inputs
-    :rtype: List
+    :rtype: List or Dict
     """
 
     # This function is called when we want to fetch real data from the
@@ -75,6 +187,17 @@ def fetch_real_data(self, start_date, end_date, data_type):
 
     # cleaning the response to get the token
     auth_token = auth_token.text.split('"')[1]
+
+    # Dispatch the new composite data types to their read-only GET-only
+    # fetchers BEFORE the legacy CSV export path. Everything below this
+    # block is the unchanged dailySummary/servings/exercises/biometrics flow.
+    if data_type == "recipes":
+        return _fetch_recipes(self.session, auth_token, start_date, end_date)
+    if data_type == "saved_meals":
+        return _fetch_saved_meals(self.session, auth_token, start_date, end_date)
+    if data_type == "foods_with_components":
+        food_ids = getattr(self, "_pending_food_ids", []) or []
+        return _fetch_foods_with_components(self.session, auth_token, food_ids)
 
     # creating the parameters for the get request
     params = {
