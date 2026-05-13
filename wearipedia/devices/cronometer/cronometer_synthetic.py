@@ -1,7 +1,35 @@
+import hashlib
 import os
 
 import numpy as np
 import pandas as pd
+
+
+def _stable_food_id(name):
+    """Deterministic positive int derived from a food name. Stable across
+    Python processes (unlike the builtin ``hash``), so the same ``Food
+    Name`` always maps to the same ``food_id`` — required for the recipe
+    explosion pipeline in `ibs-cronometer`."""
+    digest = hashlib.md5(str(name).encode("utf-8")).hexdigest()
+    return int(digest[:12], 16)
+
+
+# Synthetic composites. These are deliberately small but non-empty so
+# downstream code (e.g. `recipe_explode.py` in ibs-cronometer) can be
+# exercised end-to-end with synthetic data.
+_SYN_RECIPE_NAME = "Cody's Stir Fry"
+_SYN_RECIPE_ID = _stable_food_id(_SYN_RECIPE_NAME)
+_SYN_RECIPE_INGREDIENTS = [
+    {"name": "Brown Rice", "amount": 1.0, "unit": "cup", "fraction_of_recipe": 0.5},
+    {"name": "Olive Oil", "amount": 2.0, "unit": "tbsp", "fraction_of_recipe": 0.1},
+    {"name": "Spinach", "amount": 2.0, "unit": "cup", "fraction_of_recipe": 0.4},
+]
+_SYN_MEAL_NAME = "Tuesday Lunch"
+_SYN_MEAL_ID = _stable_food_id(_SYN_MEAL_NAME)
+_SYN_MEAL_SERVINGS = [
+    {"name": "Chicken Breast", "amount": 4.0, "unit": "oz"},
+    {"name": "Brown Rice", "amount": 1.0, "unit": "cup"},
+]
 
 
 def create_syn_data(start_date, end_date):
@@ -143,6 +171,20 @@ def create_syn_data(start_date, end_date):
         # create random servings
         serving["Day"] = d.strftime("%Y-%m-%d")
 
+        # Surface food_id on the synthetic serving so downstream code that
+        # explodes recipes/meals can match by id (the same contract the real
+        # API is expected to provide). Periodically swap in a synthetic
+        # composite food_id so the explosion pipeline has something to act
+        # on in synthetic mode.
+        if np.random.rand() < 0.1:
+            serving["Food Name"] = _SYN_RECIPE_NAME
+            serving["food_id"] = _SYN_RECIPE_ID
+        elif np.random.rand() < 0.05:
+            serving["Food Name"] = _SYN_MEAL_NAME
+            serving["food_id"] = _SYN_MEAL_ID
+        else:
+            serving["food_id"] = _stable_food_id(serving["Food Name"])
+
         # add to list
         servings.append(serving)
 
@@ -205,4 +247,51 @@ def create_syn_data(start_date, end_date):
             }
         )
 
-    return dailySummary, servings, exercises, biometrics
+    recipes = [
+        {
+            "recipe_id": _SYN_RECIPE_ID,
+            "name": _SYN_RECIPE_NAME,
+            "servings_per_recipe": 1,
+            "ingredients": [
+                {
+                    "food_id": _stable_food_id(ing["name"]),
+                    "name": ing["name"],
+                    "amount": ing["amount"],
+                    "unit": ing["unit"],
+                    "fraction_of_recipe": ing["fraction_of_recipe"],
+                }
+                for ing in _SYN_RECIPE_INGREDIENTS
+            ],
+        },
+    ]
+
+    saved_meals = [
+        {
+            "meal_id": _SYN_MEAL_ID,
+            "name": _SYN_MEAL_NAME,
+            "servings": [
+                {
+                    "food_id": _stable_food_id(s["name"]),
+                    "name": s["name"],
+                    "amount": s["amount"],
+                    "unit": s["unit"],
+                }
+                for s in _SYN_MEAL_SERVINGS
+            ],
+        },
+    ]
+
+    # foods_with_components covers branded/composite foods in Cronometer's
+    # database that aren't user-defined recipes. Empty for synthetic data
+    # because we don't model branded packaged foods here.
+    foods_with_components = {}
+
+    return (
+        dailySummary,
+        servings,
+        exercises,
+        biometrics,
+        recipes,
+        saved_meals,
+        foods_with_components,
+    )

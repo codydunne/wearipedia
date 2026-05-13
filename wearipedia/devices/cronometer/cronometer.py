@@ -26,6 +26,16 @@ class Cronometer(BaseDevice):
 
     * `biometrics`: a list that contains biometrics data for each day
 
+    * `recipes`: a list of the user's Custom Recipes with per-recipe ingredients
+      (read-only — never invokes Cronometer's destructive Explode Recipe mutation)
+
+    * `saved_meals`: a list of the user's Saved Meals with their constituent servings
+      (read-only)
+
+    * `foods_with_components`: a dict mapping ``food_id`` -> list of ingredient dicts
+      for any food whose Cronometer record exposes a components/ingredients list
+      (read-only)
+
     :param seed: random seed for synthetic data generation, defaults to 0
     :type seed: int, optional
     :param synthetic_start_date: start date for synthetic data generation, defaults to "2022-03-01"
@@ -45,7 +55,15 @@ class Cronometer(BaseDevice):
             "end_date": str(end_date),
         }
         self._initialize_device_params(
-            ["dailySummary", "servings", "exercises", "biometrics"],
+            [
+                "dailySummary",
+                "servings",
+                "exercises",
+                "biometrics",
+                "recipes",
+                "saved_meals",
+                "foods_with_components",
+            ],
             params,
             {
                 "seed": 0,
@@ -82,6 +100,12 @@ class Cronometer(BaseDevice):
 
         if data_type in ["exercises", "biometrics"]:
             return data[start_idx * 2 : end_idx * 2]
+        elif data_type in ["recipes", "saved_meals", "foods_with_components"]:
+            # User-defined composites are not date-indexed daily entries; the
+            # full collection is returned as-is so callers can resolve any
+            # food_id seen in servings, regardless of when the recipe was
+            # authored.
+            return data
         else:
             return data[start_idx:end_idx]
 
@@ -95,6 +119,9 @@ class Cronometer(BaseDevice):
             self.servings,
             self.exercises,
             self.biometrics,
+            self.recipes,
+            self.saved_meals,
+            self.foods_with_components,
         ) = create_syn_data(
             self.init_params["synthetic_start_date"],
             self.init_params["synthetic_end_date"],
