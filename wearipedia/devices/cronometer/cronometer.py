@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 from ...devices.device import BaseDevice
 from ...utils import seed_everything
 from .cronometer_fetch import fetch_real_data
-from .cronometer_synthetic import create_syn_data
+from .cronometer_synthetic import create_syn_composites, create_syn_data
 
 # todo: change this to better path
 CRED_CACHE_PATH = "/tmp/wearipedia_cronometer_data.pkl"
@@ -124,13 +124,19 @@ class Cronometer(BaseDevice):
             self.servings,
             self.exercises,
             self.biometrics,
-            self.recipes,
-            self.saved_meals,
-            self.foods_with_components,
         ) = create_syn_data(
             self.init_params["synthetic_start_date"],
             self.init_params["synthetic_end_date"],
         )
+
+        # Composite metadata for the recipe-explosion pipeline. Generated
+        # separately from the date-indexed types so this expansion stays
+        # additive and `create_syn_data`'s signature is unchanged.
+        (
+            self.recipes,
+            self.saved_meals,
+            self.foods_with_components,
+        ) = create_syn_composites()
 
     def _authenticate(self, auth_creds):
 

@@ -171,19 +171,9 @@ def create_syn_data(start_date, end_date):
         # create random servings
         serving["Day"] = d.strftime("%Y-%m-%d")
 
-        # Surface food_id on the synthetic serving so downstream code that
-        # explodes recipes/meals can match by id (the same contract the real
-        # API is expected to provide). Periodically swap in a synthetic
-        # composite food_id so the explosion pipeline has something to act
-        # on in synthetic mode.
-        if np.random.rand() < 0.1:
-            serving["Food Name"] = _SYN_RECIPE_NAME
-            serving["food_id"] = _SYN_RECIPE_ID
-        elif np.random.rand() < 0.05:
-            serving["Food Name"] = _SYN_MEAL_NAME
-            serving["food_id"] = _SYN_MEAL_ID
-        else:
-            serving["food_id"] = _stable_food_id(serving["Food Name"])
+        # Surface a stable food_id so the recipe-explosion pipeline in
+        # `ibs-cronometer` can match servings to composites by id.
+        serving["food_id"] = _stable_food_id(serving["Food Name"])
 
         # add to list
         servings.append(serving)
@@ -247,6 +237,19 @@ def create_syn_data(start_date, end_date):
             }
         )
 
+    return dailySummary, servings, exercises, biometrics
+
+
+def create_syn_composites():
+    """Synthetic recipes, saved meals, and foods-with-components for the
+    Cronometer device. Generated as a separate function (not as part of
+    :func:`create_syn_data`) so the latter's return signature stays
+    backwards-compatible and the diff stays additive.
+
+    Returns ``(recipes, saved_meals, foods_with_components)`` — small
+    but non-empty fixtures so downstream consumers like
+    `recipe_explode.py` in `ibs-cronometer` can be wired against
+    synthetic data."""
     recipes = [
         {
             "recipe_id": _SYN_RECIPE_ID,
@@ -286,12 +289,4 @@ def create_syn_data(start_date, end_date):
     # because we don't model branded packaged foods here.
     foods_with_components = {}
 
-    return (
-        dailySummary,
-        servings,
-        exercises,
-        biometrics,
-        recipes,
-        saved_meals,
-        foods_with_components,
-    )
+    return recipes, saved_meals, foods_with_components

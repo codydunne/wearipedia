@@ -10,54 +10,6 @@ import pandas as pd
 _FORBIDDEN_PATH_SUBSTRINGS = ("explode", "delete", "update")
 
 
-def _authenticate_gwt(session):
-    """Exchange the authenticated browser session for a short-lived
-    Cronometer auth token.
-
-    These calls hit the same GWT-RPC endpoints the existing
-    ``dailySummary``/``servings`` flow uses. They are POSTs against the
-    auth/token endpoints — they never touch user diary data, and they are
-    out of scope for the read-only guard on the recipe/meal fetchers
-    (which is enforced separately on the data-fetching step below).
-    """
-    GWTBaseURL = "https://cronometer.com/cronometer/app"
-    GWTHeader = "2D6A926E3729946302DC68073CB0D550"
-
-    body = f"7|0|5|https://cronometer.com/cronometer/|{GWTHeader}|com.cronometer.shared.rpc.CronometerService|authenticate|java.lang.Integer/3438268394|1|2|3|4|1|5|5|-480|"
-    header = {
-        "content-type": "text/x-gwt-rpc; charset=UTF-8",
-        "x-gwt-module-base": "https://cronometer.com/cronometer/",
-        "x-gwt-permutation": "7B121DC5483BF272B1BC1916DA9FA963",
-    }
-
-    res = session.post(GWTBaseURL, data=body, headers=header)
-
-    sesnonce_cookie = session.cookies.get("sesnonce")
-    sesnonce_value = sesnonce_cookie if sesnonce_cookie else None
-
-    pattern = r"//OK\[(?P<userid>\d+),"
-    match_object = re.match(pattern, res.text)
-    print(pattern, res.text)
-
-    if match_object:
-        userid = match_object.group("userid")
-    else:
-        raise Exception(
-            pattern, res.text, "Could not extract the userid, authentication failed"
-        )
-
-    if res.status_code != 200:
-        raise Exception("Could not fetch the data, authentication failed")
-
-    body = f"7|0|8|https://cronometer.com/cronometer/|{GWTHeader}|com.cronometer.shared.rpc.CronometerService|generateAuthorizationToken|java.lang.String/2004016611|I|com.cronometer.shared.user.AuthScope/2065601159|{sesnonce_value}|1|2|3|4|4|5|6|6|7|8|{userid}|3600|7|2|"
-    auth_token = session.post(GWTBaseURL, headers=header, data=body)
-
-    if auth_token.status_code != 200:
-        raise Exception("Could not fetch the data, authentication failed")
-
-    return auth_token.text.split('"')[1]
-
-
 def _assert_safe_path(url):
     lower = url.lower()
     for forbidden in _FORBIDDEN_PATH_SUBSTRINGS:
@@ -184,8 +136,61 @@ def fetch_real_data(self, start_date, end_date, data_type):
     if self.session is None:
         raise Exception("Not authenticated")
 
-    auth_token = _authenticate_gwt(self.session)
+    # Setting the constant urls and headers for the requests
 
+    # The base url for the cronometer app for authentication tokens
+    GWTBaseURL = "https://cronometer.com/cronometer/app"
+
+    # Header that refers to the GWT module representing the app version
+    GWTHeader = "2D6A926E3729946302DC68073CB0D550"
+
+    # The body for the request to get the authentication
+    body = f"7|0|5|https://cronometer.com/cronometer/|{GWTHeader}|com.cronometer.shared.rpc.CronometerService|authenticate|java.lang.Integer/3438268394|1|2|3|4|1|5|5|-480|"
+
+    # The header for the request to get the authentication
+    header = {
+        "content-type": "text/x-gwt-rpc; charset=UTF-8",
+        "x-gwt-module-base": "https://cronometer.com/cronometer/",
+        "x-gwt-permutation": "7B121DC5483BF272B1BC1916DA9FA963",
+    }
+
+    # Making the request to get the authentication
+    res = self.session.post(GWTBaseURL, data=body, headers=header)
+
+    # Extract the value of the "sesnonce" cookie
+    sesnonce_cookie = self.session.cookies.get("sesnonce")
+    if sesnonce_cookie:
+        self.sesnonce_value = sesnonce_cookie
+
+    pattern = r"//OK\[(?P<userid>\d+),"
+    match_object = re.match(pattern, res.text)
+    print(pattern, res.text)
+
+    if match_object:
+        userid = match_object.group("userid")
+    else:
+        raise Exception(
+            pattern, res.text, "Could not extract the userid, authentication failed"
+        )
+
+    if res.status_code != 200:
+        raise Exception("Could not fetch the data, authentication failed")
+
+    # The body for the request to get the authentication token
+    body = f"7|0|8|https://cronometer.com/cronometer/|{GWTHeader}|com.cronometer.shared.rpc.CronometerService|generateAuthorizationToken|java.lang.String/2004016611|I|com.cronometer.shared.user.AuthScope/2065601159|{self.sesnonce_value}|1|2|3|4|4|5|6|6|7|8|{userid}|3600|7|2|"
+
+    # Making the request to get the authentication token
+    auth_token = self.session.post(GWTBaseURL, headers=header, data=body)
+
+    if auth_token.status_code != 200:
+        raise Exception("Could not fetch the data, authentication failed")
+
+    # cleaning the response to get the token
+    auth_token = auth_token.text.split('"')[1]
+
+    # Dispatch the new composite data types to their read-only GET-only
+    # fetchers BEFORE the legacy CSV export path. Everything below this
+    # block is the unchanged dailySummary/servings/exercises/biometrics flow.
     if data_type == "recipes":
         return _fetch_recipes(self.session, auth_token, start_date, end_date)
     if data_type == "saved_meals":
