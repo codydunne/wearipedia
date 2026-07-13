@@ -1,5 +1,6 @@
 import io
 import re
+from urllib.parse import unquote, urlparse
 
 import pandas as pd
 
@@ -11,9 +12,15 @@ _FORBIDDEN_PATH_SUBSTRINGS = ("explode", "delete", "update")
 
 
 def _assert_safe_path(url):
-    lower = url.lower()
+    # Only the path and query identify the action being invoked, so scan
+    # those rather than the whole URL — that avoids false positives from a
+    # host/scheme/fragment that merely contains one of these words. Both are
+    # percent-decoded first so an encoded mutation (e.g. "%64elete") can't
+    # slip past the substring check.
+    parsed = urlparse(url)
+    haystack = unquote(f"{parsed.path}?{parsed.query}").lower()
     for forbidden in _FORBIDDEN_PATH_SUBSTRINGS:
-        if forbidden in lower:
+        if forbidden in haystack:
             raise Exception(
                 f"Refusing to call URL containing forbidden substring "
                 f"'{forbidden}': {url}. Recipe / saved-meal fetchers are "
@@ -55,7 +62,11 @@ def _fetch_recipes(session, auth_token, start_date, end_date):
             f"Recipe endpoint at {url} did not return JSON. Stub URL "
             f"likely needs updating; see _fetch_recipes docstring."
         )
-    return payload if isinstance(payload, list) else payload.get("recipes", [])
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        return payload.get("recipes", [])
+    return []
 
 
 def _fetch_saved_meals(session, auth_token, start_date, end_date):
@@ -78,7 +89,11 @@ def _fetch_saved_meals(session, auth_token, start_date, end_date):
             f"Saved meals endpoint at {url} did not return JSON. Stub URL "
             f"likely needs updating; see _fetch_saved_meals docstring."
         )
-    return payload if isinstance(payload, list) else payload.get("saved_meals", [])
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        return payload.get("saved_meals", [])
+    return []
 
 
 def _fetch_foods_with_components(session, auth_token, food_ids):
@@ -108,6 +123,8 @@ def _fetch_foods_with_components(session, auth_token, food_ids):
         try:
             payload = res.json()
         except ValueError:
+            continue
+        if not isinstance(payload, dict):
             continue
         components = payload.get("components") or payload.get("ingredients")
         if components:

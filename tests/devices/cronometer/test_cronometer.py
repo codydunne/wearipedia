@@ -304,3 +304,56 @@ def test_recipe_fetchers_are_read_only():
         assert getattr(session, verb).call_count == 0, (
             f"foods_with_components: session.{verb} must never be called"
         )
+
+
+def test_assert_safe_path_checks_path_not_host():
+    """`_assert_safe_path` must only reject a forbidden action in the URL's
+    path/query, and must not false-positive on a host, scheme, or fragment
+    that merely contains one of the words."""
+
+    # Forbidden substring in the path is rejected.
+    with pytest.raises(Exception):
+        cronometer_fetch._assert_safe_path("https://cronometer.com/explode?x=1")
+    # Forbidden substring in the query is rejected.
+    with pytest.raises(Exception):
+        cronometer_fetch._assert_safe_path("https://cronometer.com/food?action=delete")
+    # Percent-encoded forbidden substring is still rejected.
+    with pytest.raises(Exception):
+        cronometer_fetch._assert_safe_path("https://cronometer.com/%64elete")
+    # A host or fragment that merely contains one of the words is fine.
+    cronometer_fetch._assert_safe_path("https://update.example.com/recipes")
+    cronometer_fetch._assert_safe_path("https://cronometer.com/recipes#delete")
+
+
+def test_recipe_fetchers_tolerate_non_dict_payload():
+    """A non-list, non-dict JSON payload (string/int/None) must yield an
+    empty result rather than raising `AttributeError` on `.get`."""
+
+    for data_type in ("recipes", "saved_meals"):
+        session = _make_mock_session(json_payload="unexpected string payload")
+
+        class _Stub:
+            pass
+
+        stub = _Stub()
+        stub.session = session
+
+        result = cronometer_fetch.fetch_real_data(
+            stub, "2025-01-01", "2025-01-31", data_type
+        )
+        assert result == []
+
+    # foods_with_components skips a food whose payload isn't a dict.
+    session = _make_mock_session(json_payload=42)
+
+    class _Stub:
+        pass
+
+    stub = _Stub()
+    stub.session = session
+    stub._pending_food_ids = [101]
+
+    result = cronometer_fetch.fetch_real_data(
+        stub, "2025-01-01", "2025-01-31", "foods_with_components"
+    )
+    assert result == {}
